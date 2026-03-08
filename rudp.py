@@ -47,7 +47,8 @@ class RUDPSender:
         self.dest = (dest_ip, dest_port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(TIMEOUT)
-        self.window_size = 4
+        self.window_size = 1  # start small
+        self.ssthresh = 16  # threshold between slow start and congestion avoidance
 
     def send_file(self, data_bytes):
         """Split data into packets and send with sliding window + retransmit"""
@@ -84,12 +85,23 @@ class RUDPSender:
                     ack = parsed['ack']
                     print(f"[RUDP SENDER] Got ACK for seq={ack}")
                     if ack >= base:
-                        base = ack + 1  # slide the window forward
+                        base = ack + 1
+                        # congestion control: grow window based on current phase
+                        if self.window_size < self.ssthresh:
+                            # slow start: double the window
+                            self.window_size *= 2
+                            print(f"[CC] Slow Start → window={self.window_size}")
+                        else:
+                            # congestion avoidance: grow by 1
+                            self.window_size += 1
+                            print(f"[CC] Congestion Avoidance → window={self.window_size}")
 
             except socket.timeout:
-                # no ACK in time → go back N, resend from base
-                print(f"[RUDP SENDER] Timeout! Resending from seq={base}")
-                next_seq = base  # reset to resend whole window
+                print(f"[CC] Packet loss detected! window={self.window_size} → 1")
+                self.ssthresh = max(self.window_size // 2, 1)  # cut threshold in half
+                self.window_size = 1  # crash window back to 1
+                next_seq = base  # go back N, resend
+                print(f"[CC] ssthresh set to {self.ssthresh}")
             except ConnectionResetError:
             # Windows-only: ignore ICMP "port unreachable" errors
                 pass
@@ -123,7 +135,11 @@ class RUDPReceiver:
             if parsed['type'] == TYPE_FIN:
                 print("[RUDP RECEIVER] Got FIN, transfer complete.")
                 break
-
+            # simulate 20% packet loss for testing
+            import random
+            if random.random() < 0.2:
+                print(f"[SIMULATED LOSS] Dropping packet seq={parsed['seq']}")
+                continue
             if parsed['type'] == TYPE_DATA:
                 seq = parsed['seq']
                 print(f"[RUDP RECEIVER] Got packet seq={seq}, expected={expected}")
