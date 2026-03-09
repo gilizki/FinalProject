@@ -1,47 +1,95 @@
-# app_server.py
-import socket
-import json
+import os
 import threading
+from flask import Flask, request, jsonify, send_file
+from agent import handle_request
+from rudp import RUDPSender
 
-APP_PORT_TCP = 5000
-APP_PORT_RUDP = 5001
+# ─── Constants ──────────────────────────────────────────────
+HTTP_PORT = 5000       # browser talks to this
+RUDP_PORT = 5001       # client.py receives file on this
+
+app = Flask(__name__)
+
+# ─── Routes ─────────────────────────────────────────────────
+
+@app.route('/')
+def index():
+    """Serve the main webpage"""
+    return send_file('index.html')
+
+@app.route('/search')
+def search():
+    """Mode 2: search by song name"""
+    query = request.args.get('q', '')
+    if not query:
+        return jsonify({'status': 'error', 'message': 'No query provided'})
+    result = handle_request({'action': 'search', 'query': query})
+    return jsonify(result)
+
+@app.route('/vibe')
+def vibe():
+    """Mode 3: Gemini vibe search"""
+    description = request.args.get('q', '')
+    if not description:
+        return jsonify({'status': 'error', 'message': 'No description provided'})
+    result = handle_request({'action': 'vibe', 'description': description})
+    return jsonify(result)
+
+@app.route('/download')
+def download():
+    """
+    Download a song and send it to the client over RUDP.
+    Browser sends: /download?url=...&title=...&client_port=...
+    """
+    url        = request.args.get('url', '')
+    title      = request.args.get('title', 'song')
+    client_port = int(request.args.get('client_port', RUDP_PORT))
+
+    if not url:
+        return jsonify({'status': 'error', 'message': 'No URL provided'})
+
+    # Step 1: agent downloads the MP3 to server's downloads folder
+    result = handle_request({
+        'action': 'download_url',
+        'url': url,
+        'title': title
+    })
+
+    if result['status'] != 'success':
+        return jsonify(result)
+
+    filepath = result['filepath']
+
+    # Step 2: send the MP3 to client over RUDP in background thread
+    def send_over_rudp():
+        print(f"[APP SERVER] Sending {filepath} over RUDP to port {client_port}")
+        try:
+            with open(filepath, 'rb') as f:
+                file_bytes = f.read()
+            sender = RUDPSender('127.0.0.1', client_port)
+            sender.send_file(file_bytes)
+            print(f"[APP SERVER] RUDP transfer complete!")
+        except Exception as e:
+            print(f"[APP SERVER] RUDP transfer failed: {e}")
+
+    thread = threading.Thread(target=send_over_rudp)
+    thread.start()
+
+    return jsonify({
+        'status': 'success',
+        'message': f'Downloading {title}, transfer starting over RUDP port {client_port}',
+        'filename': result['filename']
+    })
+
+@app.route('/history')
+def history():
+    """Return list of previously downloaded songs"""
+    result = handle_request({'action': 'history'})
+    return jsonify(result)
 
 
-def handle_client(conn, addr):
-    """Handles one client connection."""
-    print(f"[APP] Client connected: {addr}")
-    try:
-        while True:
-            raw = conn.recv(4096)
-            if not raw:
-                break
-            request = json.loads(raw.decode())
-            action = request.get('action')
-
-            if action == 'search':
-                # TODO: search for song
-                response = {'status': 'ok', 'results': []}
-            elif action == 'download':
-                # TODO: trigger agent to download
-                response = {'status': 'ok', 'message': 'downloading...'}
-            else:
-                response = {'status': 'error', 'message': 'unknown action'}
-
-            conn.send(json.dumps(response).encode())
-    finally:
-        conn.close()
-
-
-def start_tcp_server():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(('127.0.0.1', APP_PORT_TCP))
-        s.listen(5)
-        print(f"[APP] TCP listening on port {APP_PORT_TCP}")
-        while True:
-            conn, addr = s.accept()
-            threading.Thread(target=handle_client, args=(conn, addr)).start()
-
-
+# ─── Start server ───────────────────────────────────────────
 if __name__ == '__main__':
-    start_tcp_server()
+    print(f"[APP SERVER] Starting on http://127.0.0.1:{HTTP_PORT}")
+    print(f"[APP SERVER] RUDP file transfer on port {RUDP_PORT}")
+    app.run(host='127.0.0.1', port=HTTP_PORT, debug=False)

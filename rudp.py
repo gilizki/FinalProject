@@ -136,10 +136,10 @@ class RUDPReceiver:
                 print("[RUDP RECEIVER] Got FIN, transfer complete.")
                 break
             # simulate 20% packet loss for testing
-            import random
-            if random.random() < 0.2:
-                print(f"[SIMULATED LOSS] Dropping packet seq={parsed['seq']}")
-                continue
+            #import random
+            #if random.random() < 0.2:
+                #print(f"[SIMULATED LOSS] Dropping packet seq={parsed['seq']}")
+                #continue
             if parsed['type'] == TYPE_DATA:
                 seq = parsed['seq']
                 print(f"[RUDP RECEIVER] Got packet seq={seq}, expected={expected}")

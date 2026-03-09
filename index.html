@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>🎵 Music Download Agent</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        h1 { color: #e94560; }
+        input {
+            width: 70%;
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-left: 8px;
+        }
+        button:hover { background: #c73652; }
+        .result-item {
+            background: #16213e;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .progress-bar {
+            width: 100%;
+            background: #333;
+            border-radius: 8px;
+            height: 20px;
+            margin-top: 10px;
+            display: none;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #e94560;
+            border-radius: 8px;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .mode-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 8px 16px;
+            border-radius: 8px;
+            background: #16213e;
+            cursor: pointer;
+        }
+        .tab.active { background: #e94560; }
+        #status { margin-top: 10px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <h1>🎵 Music Agent</h1>
+
+    <div class="mode-tabs">
+        <div class="tab active" onclick="setMode('search')">🔍 Search by name</div>
+        <div class="tab" onclick="setMode('vibe')">✨ Vibe mode</div>
+        <div class="tab" onclick="setMode('url')">🔗 Direct URL</div>
+        <div class="tab" onclick="loadHistory()">📜 History</div>
+    </div>
+
+    <div id="search-area">
+        <input id="query-input" type="text" placeholder="Search for a song..."/>
+        <button onclick="doSearch()">Search</button>
+    </div>
+
+    <div id="status"></div>
+    <div class="progress-bar" id="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+    </div>
+    <div id="results"></div>
+
+    <script>
+        let currentMode = 'search';
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            const input = document.getElementById('query-input');
+            const placeholders = {
+                'search': 'Search for a song...',
+                'vibe': 'Describe a vibe (e.g. something chill to study to)...',
+                'url': 'Paste a YouTube URL...'
+            };
+            input.placeholder = placeholders[mode] || '';
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('status').innerText = '';
+        }
+
+        async function doSearch() {
+            const query = document.getElementById('query-input').value.trim();
+            if (!query) return;
+
+            setStatus('Searching...');
+            document.getElementById('results').innerHTML = '';
+
+            let url = '';
+            if (currentMode === 'search') url = `/search?q=${encodeURIComponent(query)}`;
+            else if (currentMode === 'vibe') url = `/vibe?q=${encodeURIComponent(query)}`;
+            else if (currentMode === 'url') {
+                downloadSong(query, 'song from url');
+                return;
+            }
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (currentMode === 'vibe' && data.gemini_suggestions) {
+                setStatus(`✨ Gemini suggests: ${data.gemini_suggestions.map(s => s.title).join(', ')}`);
+                showResults(data.search_results);
+            } else {
+                setStatus(`Found ${data.results?.length || 0} results`);
+                showResults(data.results);
+            }
+        }
+
+        function showResults(results) {
+            const container = document.getElementById('results');
+            container.innerHTML = '';
+            if (!results || results.length === 0) {
+                container.innerHTML = '<p>No results found.</p>';
+                return;
+            }
+            results.forEach(r => {
+                const duration = r.duration ? `${Math.floor(r.duration/60)}:${String(Math.floor(r.duration%60)).padStart(2,'0')}` : '?';
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                div.innerHTML = `
+                    <span>🎵 ${r.title} (${duration})</span>
+                    <button onclick="downloadSong('${r.url}', '${r.title.replace(/'/g, '')}')">
+                        ⬇️ Download
+                    </button>`;
+                container.appendChild(div);
+            });
+        }
+
+        async function downloadSong(url, title) {
+            setStatus(`⬇️ Downloading: ${title}...`);
+            showProgress(true);
+
+            // animate progress bar (fake progress, real transfer happens over RUDP)
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 15;
+                if (progress > 90) progress = 90;
+                document.getElementById('progress-fill').style.width = progress + '%';
+            }, 300);
+
+            const res = await fetch(`/download?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&client_port=5001`);
+            const data = await res.json();
+
+            clearInterval(interval);
+            document.getElementById('progress-fill').style.width = '100%';
+
+            setTimeout(() => {
+                showProgress(false);
+                if (data.status === 'success') {
+                    setStatus(`✅ ${title} downloaded! Receiving over RUDP...`);
+                } else {
+                    setStatus(`❌ Error: ${data.message}`);
+                }
+            }, 500);
+        }
+
+        async function loadHistory() {
+            setStatus('Loading history...');
+            document.getElementById('results').innerHTML = '';
+            const res = await fetch('/history');
+            const data = await res.json();
+            const container = document.getElementById('results');
+            if (!data.history || data.history.length === 0) {
+                container.innerHTML = '<p>No downloads yet.</p>';
+                return;
+            }
+            data.history.forEach(song => {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                div.innerHTML = `<span>🎵 ${song.title} (${song.size_kb} KB)</span>`;
+                container.appendChild(div);
+            });
+            setStatus(`${data.history.length} songs downloaded`);
+        }
+
+        function setStatus(msg) {
+            document.getElementById('status').innerText = msg;
+        }
+
+        function showProgress(show) {
+            document.getElementById('progress-bar').style.display = show ? 'block' : 'none';
+            if (!show) document.getElementById('progress-fill').style.width = '0%';
+        }
+
+        // allow pressing Enter to search
+        document.getElementById('query-input').addEventListener('keypress', e => {
+            if (e.key === 'Enter') doSearch();
+        });
+    </script>
+</body>
+</html>
