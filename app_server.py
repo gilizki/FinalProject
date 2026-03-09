@@ -90,6 +90,10 @@ def history():
 
 # ─── Start server ───────────────────────────────────────────
 if __name__ == '__main__':
+    import signal
+    def shutdown(sig, frame):
+        print("\n[APP SERVER] Shutting down gracefully...")
+        os._exit(0)
+    signal.signal(signal.SIGINT, shutdown)
     print(f"[APP SERVER] Starting on http://127.0.0.1:{HTTP_PORT}")
-    print(f"[APP SERVER] RUDP file transfer on port {RUDP_PORT}")
-    app.run(host='127.0.0.1', port=HTTP_PORT, debug=False)
+    app.run(host='127.0.0.1', port=HTTP_PORT, debug=False)g=False)
