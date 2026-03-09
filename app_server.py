@@ -96,4 +96,4 @@ if __name__ == '__main__':
         os._exit(0)
     signal.signal(signal.SIGINT, shutdown)
     print(f"[APP SERVER] Starting on http://127.0.0.1:{HTTP_PORT}")
-    app.run(host='127.0.0.1', port=HTTP_PORT, debug=False)g=False)
+    app.run(host='127.0.0.1', port=HTTP_PORT, debug=False)
