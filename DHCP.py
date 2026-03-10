@@ -4,15 +4,15 @@ import time
 import json
 
 # Network & DHCP Constants
-DHCP_SERVER_IP = "192.168.1.1"
+DHCP_SERVER_IP = "127.0.0.1"
 DHCP_SERVER_PORT = 6767
 CLIENT_PORT = 68
 BUFFER_SIZE = 1024
 
 POOL_START, POOL_END = 100, 199
-SUBNET_MASK = "255.255.255.0"
-GATEWAY = "192.168.1.1"
-DNS_SERVER = "192.168.1.53"
+SUBNET_MASK = "255.0.0.0"
+GATEWAY = "127.0.0.1"
+DNS_SERVER = "127.0.0.1"
 LEASE_TIME = 600  # 10 minutes lease
 OFFER_TIMEOUT = 10  # 10 seconds to respond to an offer
 
@@ -42,12 +42,12 @@ OPTIONS_OFFSET = 240
 class DHCPServer:
     def __init__(self):
         # Dynamic pool for regular clients
-        self.available_ips = [f"192.168.1.{i}" for i in range(POOL_START, POOL_END + 1)]
+        self.available_ips = [f"127.0.0.{i}" for i in range(POOL_START, POOL_END + 1)]
 
         # Static IPs for project servers (DNS, Agent)
         self.static_ips = {
-            "00:11:22:33:44:55": "192.168.1.53",  # DNS Server
-            "aa:bb:cc:dd:ee:ff": "192.168.1.80"  # Agent Server
+            "00:11:22:33:44:55": "127.0.0.1",  # DNS Server
+            "aa:bb:cc:dd:ee:ff": "127.0.0.1"  # Agent Server
         }
 
         self.assigned_ips = {}  # mac_str -> (ip, expiry_timestamp)
