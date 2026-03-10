@@ -37,8 +37,8 @@ FORMAT_DNS_ANSWER = '!HHHIH4s'
 #  DNS Database & Cache
 # Static project domains (Matching your DHCP static IPs)
 DNS_TABLE = {
-    b'agent.local': '192.168.1.80',
-    b'app.local': '192.168.1.81'
+    b'agent.local': '127.0.0.1',
+    b'app.local': '127.0.0.1'
 }
 
 # Cache for external domains: domain_bytes -> (ip_string, expiry_timestamp)

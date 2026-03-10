@@ -202,7 +202,7 @@ class DHCPServer:
 
                         if ip:
                             resp_packet = self.create_dhcp_response(xid, mac_bytes, ip, DHCP_OFFER)
-                            s.sendto(resp_packet, ('255.255.255.255', CLIENT_PORT))
+                            s.sendto(resp_packet, addr) # reply directly to whoever sent the packet
                         else:
                             print(f"[DHCP] NAK: Pool empty for {mac_str}")
 
@@ -225,7 +225,7 @@ class DHCPServer:
                                 del self.pending_offers[mac_str]
 
                             resp_packet = self.create_dhcp_response(xid, mac_bytes, requested_ip, DHCP_ACK)
-                            s.sendto(resp_packet, ('255.255.255.255', CLIENT_PORT))
+                            s.sendto(resp_packet, addr)
                             print(f"[DHCP] ACK: {requested_ip} locked/renewed for {mac_str}")
 
                             clean_mac = mac_str.replace(':', '')
@@ -235,7 +235,7 @@ class DHCPServer:
                         else:
                             # Send NAK if invalid request
                             resp_packet = self.create_dhcp_response(xid, mac_bytes, None, DHCP_NAK)
-                            s.sendto(resp_packet, ('255.255.255.255', CLIENT_PORT))
+                            s.sendto(resp_packet, addr)
                             print(f"[DHCP] NAK: Bad request from {mac_str} for IP {requested_ip}")
 
                     # RELEASE -> Client gives up IP, return to pool
