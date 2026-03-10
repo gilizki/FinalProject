@@ -151,7 +151,7 @@ class DHCPServer:
 
             # שולח את העדכון לפורט הניהול של ה-DNS
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.sendto(update_data, ('127.0.0.1', 5353))
+            sock.sendto(update_data, ('127.0.0.1', 5354))
             sock.close()
         except Exception as e:
             print(f"[DHCP] Failed to notify DNS: {e}")
