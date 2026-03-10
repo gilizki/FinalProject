@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+import json
 
 # Network & DHCP Constants
 DHCP_SERVER_IP = "192.168.1.1"
@@ -71,6 +72,9 @@ class DHCPServer:
             if ip not in self.static_ips.values():
                 self.available_ips.insert(0, ip)
             print(f"[CLEANUP] Lease expired: {ip} from {mac} returned to pool.")
+            clean_mac = mac.replace(':', '')
+            hostname = f"host-{clean_mac}.local"
+            self.notify_dns(hostname, ip, "remove")
 
     def pack_dhcp_option(self, opt_code, data_bytes):
         """Packs a DHCP option into the standard Type-Length-Value format."""
@@ -135,6 +139,23 @@ class DHCPServer:
 
         options += struct.pack('!B', OPT_END)
         return bootp_header + MAGIC_COOKIE + options
+
+    def notify_dns(self, hostname, ip, action="add"):
+        """שולח עדכון לשרת ה-DNS המקומי"""
+        try:
+            update_data = json.dumps({
+                "action": action,
+                "hostname": hostname,
+                "ip": ip
+            }).encode('utf-8')
+
+            # שולח את העדכון לפורט הניהול של ה-DNS
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.sendto(update_data, ('127.0.0.1', 5353))
+            sock.close()
+        except Exception as e:
+            print(f"[DHCP] Failed to notify DNS: {e}")
+
 
     def start(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -206,6 +227,11 @@ class DHCPServer:
                             resp_packet = self.create_dhcp_response(xid, mac_bytes, requested_ip, DHCP_ACK)
                             s.sendto(resp_packet, ('255.255.255.255', CLIENT_PORT))
                             print(f"[DHCP] ACK: {requested_ip} locked/renewed for {mac_str}")
+
+                            clean_mac = mac_str.replace(':', '')
+                            hostname = f"host-{clean_mac}.local"
+                            self.notify_dns(hostname, requested_ip, "add")
+
                         else:
                             # Send NAK if invalid request
                             resp_packet = self.create_dhcp_response(xid, mac_bytes, None, DHCP_NAK)
@@ -219,6 +245,9 @@ class DHCPServer:
                             if ip not in self.static_ips.values():
                                 self.available_ips.insert(0, ip)
                             print(f"[DHCP] RELEASE: {ip} returned to pool from {mac_str}")
+                            clean_mac = mac_str.replace(':', '')
+                            hostname = f"host-{clean_mac}.local"
+                            self.notify_dns(hostname, ip, "remove")
 
                 except socket.timeout:
                     self.cleanup()
