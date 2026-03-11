@@ -1,3 +1,5 @@
 yt-dlp
 google-genai
 python-dotenv
+dnspython
+#ffmeg?

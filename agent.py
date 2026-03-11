@@ -1,63 +1,66 @@
 import yt_dlp
 import os
 import json
-from google import genai
+import time
+from groq import Groq
 from dotenv import load_dotenv
 
 # ─── Setup ──────────────────────────────────────────────────
 load_dotenv()
-client_gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 
 def ensure_downloads_dir():
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 # simple in-memory cache for search results and gemini suggestions
 _search_cache = {}
-_gemini_cache = {}
+_ai_cache = {}
 
 # ─── Mode 1: Gemini vibe search ─────────────────────────────
 def ask_gemini_for_songs(vibe_description):
     """
-    Send a mood/vibe description to Gemini.
-    Returns a list of 3 specific song suggestions.
+    Send a mood/vibe description to Groq (Llama 3).
+    (שמרתי על שם הפונקציה כדי שלא תצטרך לשנות כלום ב-handle_request)
     """
-    if vibe_description in _gemini_cache:
-        print(f"[AGENT] Gemini cache hit for: {vibe_description}")
-        return _gemini_cache[vibe_description]
+    if vibe_description in _ai_cache:
+        print(f"[AGENT] AI cache hit for: {vibe_description}")
+        return _ai_cache[vibe_description]
 
-    print(f"[AGENT] Asking Gemini for: '{vibe_description}'")
+    print(f"[AGENT] Asking Groq AI for: '{vibe_description}'")
     prompt = f"""
     The user wants to listen to music matching this description: "{vibe_description}"
 
-    Suggest exactly 3 specific songs that match this vibe.
+    Suggest exactly 3 specific real songs that match this vibe. 
+    IMPORTANT: You MUST write the song titles and artist names in their original language and alphabet (for example, use Hebrew characters if the vibe or song is Israeli/Hebrew).
+    
     Reply ONLY with a JSON array, no other text, like this:
     [
-        {{"title": "Song Name", "artist": "Artist Name"}},
+        {{"title": "שם השיר", "artist": "שם האמן"}},
         {{"title": "Song Name", "artist": "Artist Name"}},
         {{"title": "Song Name", "artist": "Artist Name"}}
     ]
     """
 
     try:
-        response = client_gemini.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt
+        # פנייה למודל Llama 3 המהיר של Groq
+        response = client_groq.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.7
         )
-        text = response.text.strip()
+
+        text = response.choices[0].message.content.strip()
         text = text.replace('```json', '').replace('```', '').strip()
         songs = json.loads(text)
-        print(f"[AGENT] Gemini suggested: {[s['title'] for s in songs]}")
-        _gemini_cache[vibe_description] = songs
+
+        print(f"[AGENT] Groq suggested: {[s['title'] for s in songs]}")
+        _ai_cache[vibe_description] = songs
         return songs
+
     except Exception as e:
-        #print(f"[AGENT] Gemini unavailable ({e}), using mock response")
-        print(f"[AGENT] Gemini unavailable, using mock response")
-        # mock response so we can keep developing
-        return [
-            {"title": "Lofi Hip Hop Mix", "artist": "ChilledCow"},
-            {"title": "Clair de Lune", "artist": "Debussy"},
-            {"title": "Study With Me", "artist": "Thomas Frank"}
-        ]
+        print(f"[AGENT] Groq error: {e}")
+        # גיבוי למקרה שהאינטרנט נופל
+        return [{"title": "Lofi Hip Hop Mix", "artist": "ChilledCow"}]
 
 
 # ─── Mode 2 + 3: YouTube search and download ────────────────
@@ -187,7 +190,7 @@ def handle_request(request):
         results = search_songs(search_query, max_results=3)
         return {
             'status': 'success',
-            'gemini_suggestions': suggestions,
+            'AI_suggestions': suggestions,
             'search_results': results
         }
 
