@@ -265,7 +265,7 @@ def http_get(path, server_ip):
     """
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(60)   # downloads can take a while
+        sock.settimeout(180)   # downloads can take a while
         sock.connect((server_ip, APP_PORT))
 
         request = (

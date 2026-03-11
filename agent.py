@@ -16,33 +16,37 @@ def ensure_downloads_dir():
 _search_cache = {}
 _ai_cache = {}
 
-# ─── Mode 1: Gemini vibe search ─────────────────────────────
-def ask_gemini_for_songs(vibe_description):
+# ─── Mode 1: AI vibe search ─────────────────────────────
+def ask_AI_for_songs(vibe_description):
     """
     Send a mood/vibe description to Groq (Llama 3).
-    (שמרתי על שם הפונקציה כדי שלא תצטרך לשנות כלום ב-handle_request)
+    Returns a list of 3 specific song suggestions.
     """
     if vibe_description in _ai_cache:
         print(f"[AGENT] AI cache hit for: {vibe_description}")
         return _ai_cache[vibe_description]
 
     print(f"[AGENT] Asking Groq AI for: '{vibe_description}'")
+
+    # Prompt instructs the AI to detect the language and reply accordingly
     prompt = f"""
     The user wants to listen to music matching this description: "{vibe_description}"
 
-    Suggest exactly 3 specific real songs that match this vibe. 
-    IMPORTANT: You MUST write the song titles and artist names in their original language and alphabet (for example, use Hebrew characters if the vibe or song is Israeli/Hebrew).
-    
-    Reply ONLY with a JSON array, no other text, like this:
+    Suggest exactly 3 specific, real songs that match this vibe.
+
+    CRITICAL INSTRUCTION: Detect the language of the user's description. 
+    - If the description is in Hebrew, you MUST write the song titles and artist names in Hebrew characters (e.g., "אריק איינשטיין").
+    - If the description is in English, write them in English.
+
+    Reply ONLY with a valid JSON array, no other text or formatting, like this:
     [
-        {{"title": "שם השיר", "artist": "שם האמן"}},
         {{"title": "Song Name", "artist": "Artist Name"}},
-        {{"title": "Song Name", "artist": "Artist Name"}}
+        {{"title": "שם השיר", "artist": "שם האמן"}}
     ]
     """
 
     try:
-        # פנייה למודל Llama 3 המהיר של Groq
+        # Requesting completion from Groq
         response = client_groq.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
@@ -59,9 +63,8 @@ def ask_gemini_for_songs(vibe_description):
 
     except Exception as e:
         print(f"[AGENT] Groq error: {e}")
-        # גיבוי למקרה שהאינטרנט נופל
+        # Fallback in case of API or network failure
         return [{"title": "Lofi Hip Hop Mix", "artist": "ChilledCow"}]
-
 
 # ─── Mode 2 + 3: YouTube search and download ────────────────
 def search_songs(query, max_results=5):
@@ -100,31 +103,53 @@ def search_songs(query, max_results=5):
 
 
 def download_song(youtube_url, title="song"):
-    """Download a song as MP3, return the file path."""
+    """
+    Download a single song as MP3.
+    Explicitly ignores playlists and sanitizes filenames.
+    """
     ensure_downloads_dir()
-    print(f"[AGENT] Downloading: {title}")
+
+    # 1. Protection against empty titles (crucial for direct URL mode)
+    if not title or title.strip() == "":
+        title = "youtube_song"
+
+    # 2. Sanitize filename to prevent OS saving errors
     safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+
+    # 3. Secondary protection if title contained only invalid characters
+    if not safe_title:
+        safe_title = f"song_{int(time.time())}"
+
+    print(f"[AGENT] Downloading: '{safe_title}' from URL: {youtube_url}")
     output_path = os.path.join(DOWNLOADS_DIR, safe_title)
 
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Optimized for faster audio downloads
+        'noplaylist': True,  # Prevents downloading entire playlists
+        'quiet': False,  # Keep false to see download progress/errors
         'no_warnings': True,
-        'outtmpl': output_path,
+        'outtmpl': f"{output_path}.%(ext)s",
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredquality': '128',  # 128kbps is lighter and faster for RUDP transfer
         }],
     }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
+
         final_path = output_path + '.mp3'
+
+        # 4. Verify file existence before returning path to the server
         if os.path.exists(final_path):
-            print(f"[AGENT] Success: {final_path}")
+            print(f"[AGENT] Success: Saved to {final_path}")
             return final_path
-        return None
+        else:
+            print(f"[AGENT] Error: Could not find the generated MP3 at {final_path}")
+            return None
+
     except Exception as e:
         print(f"[AGENT] Download error: {e}")
         return None
@@ -149,50 +174,53 @@ def get_history():
 # ─── Main handler: routes between the 3 modes ───────────────
 def handle_request(request):
     """
-    Main entry point. Receives a dict, returns a dict.
-    Mode 1: {"action": "download_url", "url": "https://youtube.com/..."}
-    Mode 2: {"action": "search", "query": "Bohemian Rhapsody"}
-    Mode 3: {"action": "vibe", "description": "something chill to study to"}
-    Other:  {"action": "history"}
+    Main entry point. Routes incoming requests to the appropriate logic.
+    Supports download by URL, search by query, AI vibe suggestions, and history.
     """
     action = request.get('action')
 
     if action == 'download_url':
-        # Mode 1: direct URL download
         url = request.get('url')
         title = request.get('title', 'song')
         if not url:
             return {'status': 'error', 'message': 'No URL provided'}
+
         path = download_song(url, title)
         if path:
             return {'status': 'success', 'filepath': path, 'filename': os.path.basename(path)}
         return {'status': 'error', 'message': 'Download failed'}
 
     elif action == 'search':
-        # Mode 2: search by name
         query = request.get('query')
         if not query:
             return {'status': 'error', 'message': 'No query provided'}
+
         results = search_songs(query)
         return {'status': 'success', 'results': results}
 
     elif action == 'vibe':
-        # Mode 3: Gemini suggests songs based on mood
         description = request.get('description')
         if not description:
             return {'status': 'error', 'message': 'No description provided'}
-        suggestions = ask_gemini_for_songs(description)
+
+        suggestions = ask_AI_for_songs(description)
         if not suggestions:
-            return {'status': 'error', 'message': 'Gemini could not suggest songs'}
-        # auto-search the first suggestion on YouTube
-        first = suggestions[0]
-        search_query = f"{first['title']} {first['artist']}"
-        results = search_songs(search_query, max_results=3)
-        return {
-            'status': 'success',
-            'AI_suggestions': suggestions,
-            'search_results': results
-        }
+            return {'status': 'error', 'message': 'AI could not suggest songs'}
+
+        # Attempt to find the first suggested song on YouTube
+        for song in suggestions:
+            search_query = f"{song['title']} {song['artist']}"
+            results = search_songs(search_query, max_results=3)
+
+            # Break loop and return as soon as valid results are found
+            if results:
+                return {
+                    'status': 'success',
+                    'ai_suggestions': suggestions,
+                    'search_results': results
+                }
+
+        return {'status': 'error', 'message': 'Could not find the suggested songs on YouTube.'}
 
     elif action == 'history':
         return {'status': 'success', 'history': get_history()}
