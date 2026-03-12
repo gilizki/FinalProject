@@ -16,7 +16,7 @@ def ensure_downloads_dir():
 _search_cache = {}
 _ai_cache = {}
 
-# ─── Mode 1: AI vibe search ─────────────────────────────
+# ─── Mode 3: AI vibe search ─────────────────────────────
 def ask_AI_for_songs(vibe_description):
     """
     Send a mood/vibe description to Groq (Llama 3).
@@ -31,9 +31,7 @@ def ask_AI_for_songs(vibe_description):
     # Prompt instructs the AI to detect the language and reply accordingly
     prompt = f"""
     The user wants to listen to music matching this description: "{vibe_description}"
-
     Suggest exactly 3 specific, real songs that match this vibe.
-
     CRITICAL INSTRUCTION: Detect the language of the user's description. 
     - If the description is in Hebrew, you MUST write the song titles and artist names in Hebrew characters (e.g., "אריק איינשטיין").
     - If the description is in English, write them in English.
@@ -50,7 +48,7 @@ def ask_AI_for_songs(vibe_description):
         response = client_groq.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
-            temperature=0.7
+            temperature=0.7 # level of determination
         )
 
         text = response.choices[0].message.content.strip()
@@ -64,9 +62,9 @@ def ask_AI_for_songs(vibe_description):
     except Exception as e:
         print(f"[AGENT] Groq error: {e}")
         # Fallback in case of API or network failure
-        return [{"title": "Lofi Hip Hop Mix", "artist": "ChilledCow"}]
+        return [{"title": vibe_description, "artist": ""}]
 
-# ─── Mode 2 + 3: YouTube search and download ────────────────
+# ─── Mode 1 + 2: YouTube search and download ────────────────
 def search_songs(query, max_results=5):
     """Search YouTube by name, return list of results."""
     # check cache first
