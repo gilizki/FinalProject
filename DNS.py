@@ -46,7 +46,7 @@ dns_cache = {}
 
 
 def dns_management_api():
-    """מאזין לעדכונים משרת ה-DHCP ומשנה את טבלת ה-DNS"""
+    """Listens for updates from the DHCP server and modifies the DNS table"""
     mgmt_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     mgmt_socket.bind(('127.0.0.1', 5354))
     print("[DNS API] Listening for DHCP updates on port 5354")

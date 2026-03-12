@@ -141,7 +141,7 @@ class DHCPServer:
         return bootp_header + MAGIC_COOKIE + options
 
     def notify_dns(self, hostname, ip, action="add"):
-        """שולח עדכון לשרת ה-DNS המקומי"""
+        """notify the local dns server"""
         try:
             update_data = json.dumps({
                 "action": action,
@@ -149,7 +149,7 @@ class DHCPServer:
                 "ip": ip
             }).encode('utf-8')
 
-            # שולח את העדכון לפורט הניהול של ה-DNS
+            # Sends the update to the DNS management port
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.sendto(update_data, ('127.0.0.1', 5354))
             sock.close()
