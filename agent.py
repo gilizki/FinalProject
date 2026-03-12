@@ -235,8 +235,8 @@ if __name__ == '__main__':
     print("=== Test Mode 1: Direct URL ===")
     result = handle_request({
         'action': 'download_url',
-        'url': 'https://www.youtube.com/watch?v=RfBHgGR8HDo',
-        'title': 'lofi test song'
+        'url': 'https://www.youtube.com/watch?v=XdpLasLSIAw&list=RDXdpLasLSIAw&start_radio=1',
+        'title': 'רביד פלוטניק - בדיוק כמו שאני / Ravid Plotnik - As I Am'
     })
     print(json.dumps(result, indent=2))
 

@@ -235,7 +235,7 @@ def start():
                 daemon=True
             ).start()
     except KeyboardInterrupt:
-        print("\n[APP SERVER] Shutting down gracefully...")
+        print("\n[APP SERVER] Shutting down app server")
     finally:
         server_sock.close()
 

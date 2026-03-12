@@ -38,7 +38,7 @@ def parse_packet(raw_bytes):
     return {
         'type':   ptype,
         'flags':  flags,
-        'window': window,   # receiver's advertised window (flow control)
+        'window': window,
         'seq':    seq,
         'ack':    ack,
         'data':   raw_bytes[HEADER_SIZE:]
@@ -51,22 +51,22 @@ class RUDPSender:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(TIMEOUT)
 
-        # ── Congestion Control state ──
-        self.cwnd     = 1.0    # congestion window (float for smooth CA growth)
-        self.ssthresh = 16.0   # slow start threshold
+        # Congestion Control state
+        self.cwnd     = 1.0
+        self.ssthresh = 16.0
 
-        # ── Flow Control state ──
-        self.rwnd = RECEIVER_WINDOW  # receiver's advertised window (updated from ACKs)
+        # Flow Control state
+        self.rwnd = RECEIVER_WINDOW
 
-        # ── Fast Retransmit state ──
-        self.last_ack      = -1   # last ACK number we received
-        self.dup_ack_count = 0    # how many times we've seen the same ACK
+        # Fast Retransmit state
+        self.last_ack      = -1
+        self.dup_ack_count = 0
 
     def _effective_window(self):
         """
         Effective window = min(congestion window, receiver window).
-        Flow control: we can't send more than the receiver can buffer.
-        Congestion control: we can't send more than the network can handle.
+        Flow control:    we cannot send more than the receiver can buffer.
+        Congestion ctrl: we cannot send more than the network can handle.
         """
         return max(1, min(int(self.cwnd), self.rwnd))
 
@@ -75,15 +75,14 @@ class RUDPSender:
         chunks = [data_bytes[i:i + MAX_SEGMENT_SIZE]
                   for i in range(0, len(data_bytes), MAX_SEGMENT_SIZE)]
         total    = len(chunks)
-        base     = 0   # oldest unACKed packet
-        next_seq = 0   # next packet to send
+        base     = 0
+        next_seq = 0
 
-        print(f"[RUDP] Sending {total} packets to {self.dest}")
+        print(f"[RUDP] Starting transfer: {total} packets ({len(data_bytes)} bytes) → {self.dest}")
 
         while base < total:
             win = self._effective_window()
 
-            # ── Send all packets within the window ──
             while next_seq < base + win and next_seq < total:
                 packet = make_packet(
                     ptype=TYPE_DATA,
@@ -93,10 +92,8 @@ class RUDPSender:
                     data=chunks[next_seq]
                 )
                 self.sock.sendto(packet, self.dest)
-                print(f"[RUDP SENDER] Sent packet seq={next_seq}")
                 next_seq += 1
 
-            # ── Wait for ACK ──
             try:
                 raw, _ = self.sock.recvfrom(HEADER_SIZE + MAX_SEGMENT_SIZE)
                 parsed = parse_packet(raw)
@@ -104,54 +101,43 @@ class RUDPSender:
                     continue
 
                 ack = parsed['ack']
+                self.rwnd = max(1, parsed['window'])   # flow control update
 
-                # ── Flow Control: update receiver window from every ACK ──
-                self.rwnd = max(1, parsed['window'])
-
-                # ── Check for duplicate ACK (Fast Retransmit) ──
                 if ack == self.last_ack:
                     self.dup_ack_count += 1
-                    print(f"[FR] Duplicate ACK={ack} (count={self.dup_ack_count})")
-
                     if self.dup_ack_count >= 3:
-                        # 3 duplicate ACKs = packet lost, retransmit immediately
-                        print(f"[FR] 3 duplicate ACKs! Fast retransmit seq={base}")
-                        self.ssthresh = max(self.cwnd / 2, 2.0)
-                        self.cwnd     = self.ssthresh + 3   # inflate window
-                        next_seq      = base                # retransmit from base
+                        # Fast Retransmit: 3 duplicate ACKs = loss detected
+                        print(f"[RUDP] Fast Retransmit at seq={base} (3 dup ACKs)")
+                        self.ssthresh      = max(self.cwnd / 2, 2.0)
+                        self.cwnd          = self.ssthresh + 3
+                        next_seq           = base
                         self.dup_ack_count = 0
 
                 elif ack > self.last_ack:
-                    # ── New ACK: advance base, update CC ──
                     self.last_ack      = ack
                     self.dup_ack_count = 0
                     base               = ack + 1
 
                     if self.cwnd < self.ssthresh:
-                        # Slow Start: double window each RTT (×2 per ACK is approx)
                         self.cwnd *= 2
-                        print(f"[CC] Slow Start → cwnd={int(self.cwnd)}, ssthresh={int(self.ssthresh)}, rwnd={self.rwnd}")
+                        print(f"[RUDP] Slow Start      → cwnd={int(self.cwnd):>4}, ssthresh={int(self.ssthresh):>4}, rwnd={self.rwnd}")
                     else:
-                        # Congestion Avoidance: grow by 1 per RTT
-                        # Adding 1/cwnd per ACK ≈ +1 per full window of ACKs = +1/RTT
                         self.cwnd += 1.0 / self.cwnd
-                        print(f"[CC] Cong. Avoidance → cwnd={int(self.cwnd)}, ssthresh={int(self.ssthresh)}, rwnd={self.rwnd}")
+                        print(f"[RUDP] Cong. Avoidance → cwnd={int(self.cwnd):>4}, ssthresh={int(self.ssthresh):>4}, rwnd={self.rwnd}")
 
             except socket.timeout:
-                # Timeout = packet loss → Go-Back-N
-                print(f"[CC] Timeout! cwnd={int(self.cwnd)} → 1, ssthresh={int(self.cwnd / 2)}")
+                print(f"[RUDP] Timeout! Loss at seq={base} → cwnd=1, ssthresh={int(self.cwnd / 2)}")
                 self.ssthresh      = max(self.cwnd / 2, 2.0)
                 self.cwnd          = 1.0
                 self.dup_ack_count = 0
-                next_seq           = base   # retransmit all unACKed
+                next_seq           = base
 
             except ConnectionResetError:
-                pass   # Windows: ignore ICMP port unreachable
+                pass
 
-        # ── Done: send FIN ──
         fin = make_packet(TYPE_FIN, seq_num=0, ack_num=0, window_size=0)
         self.sock.sendto(fin, self.dest)
-        print("[RUDP SENDER] File sent. FIN sent.")
+        print(f"[RUDP] Transfer complete! {total} packets sent.")
         self.sock.close()
 
 
@@ -159,15 +145,14 @@ class RUDPReceiver:
     def __init__(self, listen_port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', listen_port))
-        # Flow control: how many packets we can buffer
-        # We advertise this in every ACK so sender respects it
         self.rwnd = RECEIVER_WINDOW
-        print(f"[RUDP RECEIVER] Listening on port {listen_port}")
+        print(f"[RUDP] Receiver listening on port {listen_port}")
 
     def receive_file(self):
         """Receive packets in order, send cumulative ACKs, reassemble file"""
-        received = {}   # seq_num → data bytes
-        expected = 0    # next in-order seq we want
+        received   = {}
+        expected   = 0
+        last_print = -1
 
         while True:
             raw, sender_addr = self.sock.recvfrom(HEADER_SIZE + MAX_SEGMENT_SIZE)
@@ -176,39 +161,38 @@ class RUDPReceiver:
                 continue
 
             if parsed['type'] == TYPE_FIN:
-                print("[RUDP RECEIVER] Got FIN, transfer complete.")
+                print(f"[RUDP] FIN received — transfer complete ({len(received)} packets)")
                 break
 
             if parsed['type'] == TYPE_DATA:
                 seq = parsed['seq']
-                print(f"[RUDP RECEIVER] Got packet seq={seq}, expected={expected}")
 
-                # store packet (ignore duplicates)
                 if seq not in received:
                     received[seq] = parsed['data']
 
-                # advance expected to highest in-order received
                 while expected in received:
                     expected += 1
                 ack_num = expected - 1
 
-                # ── Flow Control: advertise how much buffer we have left ──
-                # reduce rwnd as buffer fills, increase as we consume data
-                buffered = len(received) - expected  # out-of-order packets buffered
+                # Flow Control: tell sender how much buffer we have left
+                buffered          = len(received) - expected
                 advertised_window = max(1, self.rwnd - buffered)
 
                 ack_packet = make_packet(
                     ptype=TYPE_ACK,
                     seq_num=0,
                     ack_num=ack_num,
-                    window_size=advertised_window   # tells sender our available buffer
+                    window_size=advertised_window
                 )
                 self.sock.sendto(ack_packet, sender_addr)
-                print(f"[RUDP RECEIVER] Sent ACK={ack_num}, rwnd={advertised_window}")
 
-        # reassemble in order
+                # print progress every 100 packets instead of every single one
+                if ack_num // 100 > last_print // 100:
+                    print(f"[RUDP] Receiving... ack={ack_num}, rwnd={advertised_window}")
+                    last_print = ack_num
+
         result = b''.join(received[i] for i in sorted(received.keys()))
-        print(f"[RUDP RECEIVER] Reassembled {len(result)} bytes.")
+        print(f"[RUDP] Reassembled {len(result)} bytes successfully.")
         return result
 
 
