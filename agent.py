@@ -12,9 +12,10 @@ DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downlo
 
 def ensure_downloads_dir():
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-# simple in-memory cache for search results and gemini suggestions
+# simple in-memory cache for search results and AI suggestions
 _search_cache = {}
 _ai_cache = {}
+_download_cache = set()
 
 # ─── Mode 3: AI vibe search ─────────────────────────────
 def ask_AI_for_songs(vibe_description):
@@ -106,20 +107,22 @@ def download_song(youtube_url, title="song"):
     Explicitly ignores playlists and sanitizes filenames.
     """
     ensure_downloads_dir()
-
     # 1. Protection against empty titles (crucial for direct URL mode)
     if not title or title.strip() == "":
         title = "youtube_song"
-
     # 2. Sanitize filename to prevent OS saving errors
     safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
-
     # 3. Secondary protection if title contained only invalid characters
     if not safe_title:
         safe_title = f"song_{int(time.time())}"
-
-    print(f"[AGENT] Downloading: '{safe_title}' from URL: {youtube_url}")
+    final_path = os.path.join(DOWNLOADS_DIR, safe_title + '.mp3')
     output_path = os.path.join(DOWNLOADS_DIR, safe_title)
+    cache_key = safe_title + '_' + youtube_url[-11:]  # video ID is last 11 chars of YouTube URL
+    print(f"[AGENT] Downloading: '{safe_title}' from URL: {youtube_url}")
+    # if already downloaded, skip yt-dlp entirely
+    if os.path.exists(final_path) and cache_key in _download_cache:
+        print(f"[AGENT] Already downloaded at Agent, using cached file: {final_path}")
+        return final_path
 
     ydl_opts = {
         'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Optimized for faster audio downloads
@@ -137,12 +140,12 @@ def download_song(youtube_url, title="song"):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
-
         final_path = output_path + '.mp3'
 
         # 4. Verify file existence before returning path to the server
         if os.path.exists(final_path):
             print(f"[AGENT] Success: Saved to {final_path}")
+            _download_cache.add(cache_key)
             return final_path
         else:
             print(f"[AGENT] Error: Could not find the generated MP3 at {final_path}")
