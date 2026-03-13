@@ -16,7 +16,7 @@ BUFFER_SIZE      = 1024
 POOL_START, POOL_END = 100, 199
 SUBNET_MASK = "255.0.0.0"
 GATEWAY     = "127.0.0.1"
-DNS_SERVER  = "127.0.0.1"
+DNS_SERVER  = "10.0.0.10"
 LEASE_TIME  = 600   # how long a client "owns" its IP (in seconds) = 10 minutes
 OFFER_TIMEOUT = 10  # if a client doesn't REQUEST within 10 seconds, we take back the offer
 
