@@ -1,6 +1,5 @@
-yt-dlp
-google-genai
-python-dotenv
-dnspython
-#ffmeg
-groq
+yt-dlp #for downloading from youtube
+python-dotenv #for using .env
+dnspython #for our DNS implementation
+groq #for using AI mode via groq api key
+#ffmeg - needs to be installd separately: winget install ffmpeg / brew install ffmpeg
