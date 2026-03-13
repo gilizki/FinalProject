@@ -222,15 +222,19 @@ def main():
     # Start the DHCP update listener in the background
     threading.Thread(target=dns_management_api, daemon=True).start()
 
-    while True:
-        try:
-            data, client_address = dns_socket.recvfrom(BUFFER_SIZE)
-            if len(data) >= DNS_HEADER_LENGTH:
-                response_packet = build_dns_response(data)
-                dns_socket.sendto(response_packet, client_address)
-        except Exception as e:
-            print(f"[DNS Server] Error handling query: {e}")
-
+    try:
+        while True:
+            try:
+                data, client_address = dns_socket.recvfrom(BUFFER_SIZE)
+                if len(data) >= DNS_HEADER_LENGTH:
+                    response_packet = build_dns_response(data)
+                    dns_socket.sendto(response_packet, client_address)
+            except Exception as e:
+                print(f"[DNS Server] Error handling query: {e}")
+    except KeyboardInterrupt:
+        print("\n[DNS Server] Server shut down gracefully by user.")
+    finally:
+        dns_socket.close()
 
 if __name__ == "__main__":
     main()
