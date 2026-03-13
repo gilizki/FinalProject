@@ -5,23 +5,38 @@ import time
 from groq import Groq
 from dotenv import load_dotenv
 
-# ─── Setup ──────────────────────────────────────────────────
-load_dotenv()
+# ─── Setup ───────────────────────────────────────────────────
+load_dotenv()   # reads GROQ_API_KEY from the .env file
 client_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# Downloads go to a folder next to this file, not wherever Python is run from.
+# os.path.abspath(__file__) gives us the absolute path of agent.py,
+# then dirname gives us the folder it lives in.
 DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 
 def ensure_downloads_dir():
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-# simple in-memory cache for search results and AI suggestions
-_search_cache = {}
-_ai_cache = {}
+
+# Simple in-memory caches to avoid repeating the same slow operations.
+# _search_cache: YouTube search results (so we don't re-query for the same song name)
+# _ai_cache: Groq AI responses (so we don't re-call the API for the same vibe description)
+# _download_cache: set of safe_title + video_id strings for songs already downloaded
+_search_cache   = {}
+_ai_cache       = {}
 _download_cache = set()
 
-# ─── Mode 3: AI vibe search ─────────────────────────────
+# ─── Mode 3: AI vibe search ───────────────────────────────────
+
 def ask_AI_for_songs(vibe_description):
     """
-    Send a mood/vibe description to Groq (Llama 3).
-    Returns a list of 3 specific song suggestions.
+    Send a mood description to Groq (Llama 3.3 70B) and get back 3 song suggestions.
+
+    We use a structured prompt that tells the model:
+    - detect the language of the description (Hebrew or English)
+    - return ONLY a JSON array, no extra text
+
+    The temperature=0.7 controls creativity:
+    higher = more varied suggestions, lower = more predictable answers.
     """
     if vibe_description in _ai_cache:
         print(f"[AGENT] AI cache hit for: {vibe_description}")
@@ -29,7 +44,6 @@ def ask_AI_for_songs(vibe_description):
 
     print(f"[AGENT] Asking Groq AI for: '{vibe_description}'")
 
-    # Prompt instructs the AI to detect the language and reply accordingly
     prompt = f"""
     The user wants to listen to music matching this description: "{vibe_description}"
     Suggest exactly 3 specific, real songs that match this vibe.
@@ -45,14 +59,14 @@ def ask_AI_for_songs(vibe_description):
     """
 
     try:
-        # Requesting completion from Groq
         response = client_groq.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
-            temperature=0.7 # level of determination
+            temperature=0.7
         )
 
         text = response.choices[0].message.content.strip()
+        # Strip markdown code fences in case the model wraps the JSON anyway
         text = text.replace('```json', '').replace('```', '').strip()
         songs = json.loads(text)
 
@@ -62,22 +76,26 @@ def ask_AI_for_songs(vibe_description):
 
     except Exception as e:
         print(f"[AGENT] Groq error: {e}")
-        # Fallback in case of API or network failure
+        # Fallback: treat the description itself as a search query
         return [{"title": vibe_description, "artist": ""}]
 
-# ─── Mode 1 + 2: YouTube search and download ────────────────
+# ─── Mode 1 + 2: YouTube search and download ──────────────────
+
 def search_songs(query, max_results=5):
-    """Search YouTube by name, return list of results."""
-    # check cache first
+    """
+    Search YouTube and return a list of result dicts (title, url, duration, etc.).
+    Uses yt-dlp in 'flat extract' mode which gets metadata without downloading anything.
+    Results are cached by query string to avoid re-querying YouTube for the same thing.
+    """
     if query in _search_cache:
         print(f"[AGENT] Cache hit for: {query}")
         return _search_cache[query]
-    #if not in cache search YouTube
+
     print(f"[AGENT] Searching YouTube for: {query}")
     ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,
+        'quiet':        True,
+        'no_warnings':  True,
+        'extract_flat': True,   # only get metadata, don't download
     }
     results = []
     try:
@@ -86,14 +104,13 @@ def search_songs(query, max_results=5):
             for entry in info['entries']:
                 if entry:
                     results.append({
-                        'title': entry.get('title', 'Unknown'),
-                        'duration': entry.get('duration', 0),
+                        'title':     entry.get('title', 'Unknown'),
+                        'duration':  entry.get('duration', 0),
                         'thumbnail': entry.get('thumbnail', ''),
-                        'url': f"https://www.youtube.com/watch?v={entry.get('id', '')}",
-                        'id': entry.get('id', '')
+                        'url':       f"https://www.youtube.com/watch?v={entry.get('id', '')}",
+                        'id':        entry.get('id', '')
                     })
         print(f"[AGENT] Found {len(results)} results")
-        # save to cache before returning
         _search_cache[query] = results
         return results
     except Exception as e:
@@ -103,37 +120,50 @@ def search_songs(query, max_results=5):
 
 def download_song(youtube_url, title="song"):
     """
-    Download a single song as MP3.
-    Explicitly ignores playlists and sanitizes filenames.
+    Download a single YouTube video as an MP3 file using yt-dlp + FFmpeg.
+
+    yt-dlp downloads the best available audio stream (usually .m4a),
+    then the FFmpeg postprocessor converts it to 128kbps MP3.
+    128kbps is a good tradeoff between quality and file size for RUDP transfer.
+
+    We sanitize the filename first to remove characters the OS won't accept,
+    and check if we've already downloaded this song before calling yt-dlp.
     """
     ensure_downloads_dir()
-    # 1. Protection against empty titles (crucial for direct URL mode)
+
+    # Guard against empty title
     if not title or title.strip() == "":
         title = "youtube_song"
-    # 2. Sanitize filename to prevent OS saving errors
+
+    # Remove any characters that aren't safe in filenames
     safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
-    # 3. Secondary protection if title contained only invalid characters
+
+    # Secondary guard if the title was entirely invalid characters
     if not safe_title:
         safe_title = f"song_{int(time.time())}"
-    final_path = os.path.join(DOWNLOADS_DIR, safe_title + '.mp3')
+
+    final_path  = os.path.join(DOWNLOADS_DIR, safe_title + '.mp3')
     output_path = os.path.join(DOWNLOADS_DIR, safe_title)
-    cache_key = safe_title + '_' + youtube_url[-11:]  # video ID is last 11 chars of YouTube URL
+
+    # Cache key uses the filename + last 11 chars of URL (YouTube video ID)
+    cache_key = safe_title + '_' + youtube_url[-11:]
     print(f"[AGENT] Downloading: '{safe_title}' from URL: {youtube_url}")
-    # if already downloaded, skip yt-dlp entirely
+
+    # Skip yt-dlp entirely if we already have the file
     if os.path.exists(final_path) and cache_key in _download_cache:
-        print(f"[AGENT] Already downloaded at Agent, using cached file: {final_path}")
+        print(f"[AGENT] Already downloaded, using cached file: {final_path}")
         return final_path
 
     ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Optimized for faster audio downloads
-        'noplaylist': True,  # Prevents downloading entire playlists
-        'quiet': False,  # Keep false to see download progress/errors
+        'format':      'bestaudio[ext=m4a]/bestaudio/best',
+        'noplaylist':  True,    # never download entire playlists, only the one video
+        'quiet':       False,   # keep visible so we can see progress and errors
         'no_warnings': True,
-        'outtmpl': f"{output_path}.%(ext)s",
+        'outtmpl':     f"{output_path}.%(ext)s",
         'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '128',  # 128kbps is lighter and faster for RUDP transfer
+            'key':             'FFmpegExtractAudio',
+            'preferredcodec':  'mp3',
+            'preferredquality': '128',
         }],
     }
 
@@ -142,7 +172,6 @@ def download_song(youtube_url, title="song"):
             ydl.download([youtube_url])
         final_path = output_path + '.mp3'
 
-        # 4. Verify file existence before returning path to the server
         if os.path.exists(final_path):
             print(f"[AGENT] Success: Saved to {final_path}")
             _download_cache.add(cache_key)
@@ -157,7 +186,10 @@ def download_song(youtube_url, title="song"):
 
 
 def get_history():
-    """Return list of all downloaded MP3s."""
+    """
+    Scan the downloads folder and return metadata for every MP3 file found.
+    This is the server-side history — what we've downloaded before.
+    """
     ensure_downloads_dir()
     files = []
     for f in os.listdir(DOWNLOADS_DIR):
@@ -165,23 +197,29 @@ def get_history():
             full_path = os.path.join(DOWNLOADS_DIR, f)
             files.append({
                 'filename': f,
-                'title': f.replace('.mp3', ''),
-                'size_kb': round(os.path.getsize(full_path) / 1024, 1),
-                'path': full_path
+                'title':    f.replace('.mp3', ''),
+                'size_kb':  round(os.path.getsize(full_path) / 1024, 1),
+                'path':     full_path
             })
     return files
 
 
-# ─── Main handler: routes between the 3 modes ───────────────
+# ─── Main handler: routes between the 3 modes ─────────────────
+
 def handle_request(request):
     """
-    Main entry point. Routes incoming requests to the appropriate logic.
-    Supports download by URL, search by query, AI vibe suggestions, and history.
+    The main entry point that app_server.py calls for every client action.
+    Routes to the appropriate function based on the 'action' field:
+
+      download_url → download a specific YouTube URL and return the file path
+      search       → search YouTube by name and return a list of results
+      vibe         → ask AI for song suggestions matching a mood, then search those
+      history      → list all previously downloaded MP3 files
     """
     action = request.get('action')
 
     if action == 'download_url':
-        url = request.get('url')
+        url   = request.get('url')
         title = request.get('title', 'song')
         if not url:
             return {'status': 'error', 'message': 'No URL provided'}
@@ -208,15 +246,13 @@ def handle_request(request):
         if not suggestions:
             return {'status': 'error', 'message': 'AI could not suggest songs'}
 
-        # Attempt to find the first suggested song on YouTube
+        # Try each AI suggestion on YouTube until we find one with results
         for song in suggestions:
             search_query = f"{song['title']} {song['artist']}"
-            results = search_songs(search_query, max_results=3)
-
-            # Break loop and return as soon as valid results are found
+            results      = search_songs(search_query, max_results=3)
             if results:
                 return {
-                    'status': 'success',
+                    'status':         'success',
                     'ai_suggestions': suggestions,
                     'search_results': results
                 }
@@ -230,35 +266,26 @@ def handle_request(request):
         return {'status': 'error', 'message': f'Unknown action: {action}'}
 
 
-# ─── Quick test ──────────────────────────────────────────────
+# ─── Quick test ───────────────────────────────────────────────
 if __name__ == '__main__':
     print("=== Test Mode 1: Direct URL ===")
     result = handle_request({
         'action': 'download_url',
-        'url': 'https://www.youtube.com/watch?v=XdpLasLSIAw&list=RDXdpLasLSIAw&start_radio=1',
+        'url':   'https://www.youtube.com/watch?v=XdpLasLSIAw&list=RDXdpLasLSIAw&start_radio=1',
         'title': 'רביד פלוטניק - בדיוק כמו שאני / Ravid Plotnik - As I Am'
     })
     print(json.dumps(result, indent=2))
 
     print("\n=== Test Mode 2: Search by name ===")
-    result = handle_request({
-        'action': 'search',
-        'query': 'Bohemian Rhapsody'
-    })
+    result = handle_request({'action': 'search', 'query': 'Bohemian Rhapsody'})
     print(json.dumps(result, indent=2))
 
     print("\n=== Test Mode 3: Vibe (first call) ===")
-    result = handle_request({
-        'action': 'vibe',
-        'description': 'something chill to study to'
-    })
+    result = handle_request({'action': 'vibe', 'description': 'something chill to study to'})
     print(json.dumps(result, indent=2))
 
     print("\n=== Test Mode 3: Vibe (second call - should hit cache) ===")
-    result = handle_request({
-        'action': 'vibe',
-        'description': 'something chill to study to'
-    })
+    result = handle_request({'action': 'vibe', 'description': 'something chill to study to'})
     print(json.dumps(result, indent=2))
 
     print("\n=== Test History ===")
