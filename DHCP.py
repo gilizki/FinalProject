@@ -7,7 +7,7 @@ import json
 # The server listens on port 6767 instead of the real DHCP port (67)
 # because port 67 requires root/admin privileges on most systems.
 # Using 6767 lets us run without sudo during development.
-DHCP_SERVER_IP   = "127.0.0.1"
+DHCP_SERVER_IP   = "10.0.0.10"
 DHCP_SERVER_PORT = 6767
 CLIENT_PORT      = 68        # standard DHCP client port (not used here, just for reference)
 BUFFER_SIZE      = 1024
