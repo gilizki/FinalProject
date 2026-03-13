@@ -6,16 +6,25 @@ import urllib.parse
 from agent import handle_request
 from rudp import RUDPSender
 
-# ─── Constants ──────────────────────────────────────────────
-HTTP_PORT = 5000   # client sends HTTP requests here (TCP)
-RUDP_PORT = 5001   # client receives MP3 over RUDP here
-TCP_TRANSFER_PORT = 5002   # client receives MP3 over plain TCP here
-HOST  = '0.0.0.0'
+# ─── Constants ───────────────────────────────────────────────
+# Three separate ports for three different jobs:
+#   5000 = HTTP control channel (client sends search/download commands here)
+#   5001 = RUDP file transfer (server pushes MP3 to client over our custom protocol)
+#   5002 = plain TCP file transfer (same idea, but using standard TCP)
+HTTP_PORT         = 5000
+RUDP_PORT         = 5001
+TCP_TRANSFER_PORT = 5002
+HOST              = '0.0.0.0'   # accept connections from any machine, not just localhost
 
-# ─── HTTP Helpers ────────────────────────────────────────────
+# ─── HTTP Helpers ─────────────────────────────────────────────
 
 def send_response(conn, body_dict, status=200):
-    """Serialize dict to JSON and send as a valid HTTP response"""
+    """
+    Serialize a Python dict to JSON and send it back as a valid HTTP/1.1 response.
+    We manually build the response string because we're not using Flask —
+    just raw sockets — so we have to follow the HTTP format ourselves:
+      status line → headers → blank line → body
+    """
     body = json.dumps(body_dict).encode('utf-8')
     response = (
         f"HTTP/1.1 {status} OK\r\n"
@@ -28,9 +37,19 @@ def send_response(conn, body_dict, status=200):
 
 def parse_request(raw):
     """
-    Parse raw HTTP bytes into (method, path, params).
-    Example: b'GET /search?q=hello HTTP/1.1...'
-         ->  ('GET', '/search', {'q': 'hello'})
+    Parse raw HTTP request bytes into (method, path, params).
+
+    HTTP request first line format:
+      GET /search?q=hello%20world HTTP/1.1
+
+    We split on spaces to get method and full path,
+    then split the path on '?' to separate query string params.
+
+    Example:
+      b'GET /search?q=hello HTTP/1.1\\r\\n...'
+      → ('GET', '/search', {'q': 'hello'})
+
+    Returns (None, None, {}) if the request is malformed.
     """
     text       = raw.decode('utf-8', errors='ignore')
     first_line = text.split('\r\n')[0]
@@ -43,7 +62,7 @@ def parse_request(raw):
 
     if '?' in full_path:
         path, query_string = full_path.split('?', 1)
-        # parse_qs returns {'q': ['hello']} so flatten to {'q': 'hello'}
+        # parse_qs returns lists: {'q': ['hello']} → we flatten to {'q': 'hello'}
         params = {k: v[0] for k, v in urllib.parse.parse_qs(query_string).items()}
     else:
         path   = full_path
@@ -51,10 +70,14 @@ def parse_request(raw):
 
     return method, path, params
 
-# ─── File Transfer ───────────────────────────────────────────
+# ─── File Transfer ────────────────────────────────────────────
 
 def send_over_rudp(filepath, client_ip, client_port):
-    """Send a file to the client using our custom RUDP protocol"""
+    """
+    Read the MP3 file into memory and send it to the client using our custom
+    RUDP protocol (reliable UDP with sliding window, congestion control, etc.).
+    The client must already be listening on client_port before we call this.
+    """
     print(f"[APP SERVER] Sending {filepath} over RUDP → {client_ip}:{client_port}")
     try:
         with open(filepath, 'rb') as f:
@@ -67,9 +90,9 @@ def send_over_rudp(filepath, client_ip, client_port):
 
 def send_over_tcp(filepath, client_ip, client_port):
     """
-    Send a file to the client using plain TCP.
-    Client listens, server connects and sends all bytes, then closes.
-    TCP handles reliability internally — no custom protocol needed.
+    Read the MP3 file into memory and send it over a plain TCP connection.
+    Here the server acts as the TCP *client* (it connects to the client's listening port).
+    TCP handles reliability internally, so we just sendall() and close.
     """
     print(f"[APP SERVER] Sending {filepath} over TCP → {client_ip}:{client_port}")
     try:
@@ -84,17 +107,24 @@ def send_over_tcp(filepath, client_ip, client_port):
     except Exception as e:
         print(f"[APP SERVER] TCP transfer failed: {e}")
 
-# ─── Route Handlers ──────────────────────────────────────────
+# ─── Route Handlers ───────────────────────────────────────────
 
 def handle_search(params):
-    """Mode 1: search YouTube by song name"""
+    """
+    Mode 1: Search YouTube by song name.
+    The 'q' param comes from the URL: /search?q=bohemian+rhapsody
+    """
     query = params.get('q', '')
     if not query:
         return {'status': 'error', 'message': 'No query provided'}
     return handle_request({'action': 'search', 'query': query})
 
 def handle_vibe(params):
-    """Mode 3: AI suggests songs based on mood description"""
+    """
+    Mode 3: AI-powered mood search.
+    The client describes a vibe, we ask Groq (Llama 3) for song suggestions,
+    then search YouTube for those songs.
+    """
     description = params.get('q', '')
     if not description:
         return {'status': 'error', 'message': 'No description provided'}
@@ -102,23 +132,27 @@ def handle_vibe(params):
 
 def handle_download_rudp(params, client_addr):
     """
-    Download song and send to client over RUDP (custom reliable UDP).
-    Transfer runs in background thread so HTTP reply is immediate.
+    Mode 2 (RUDP variant): Download a song and send it to the client over RUDP.
+
+    Flow:
+      1. agent.py downloads the MP3 from YouTube to the server's downloads/ folder
+      2. We send the HTTP response immediately so the client doesn't time out waiting
+      3. The actual file transfer runs in a background thread after the HTTP reply
     """
     url         = params.get('url', '')
     title       = params.get('title', 'song')
     client_port = int(params.get('client_port', RUDP_PORT))
-    client_ip   = client_addr[0]
+    client_ip   = client_addr[0]   # where the HTTP request came from = where to send the file
 
     if not url:
         return {'status': 'error', 'message': 'No URL provided'}
 
-    # Step 1: agent downloads MP3 to server's downloads/ folder
+    # Step 1: download the MP3 (blocking — we need the file before we can send it)
     result = handle_request({'action': 'download_url', 'url': url, 'title': title})
     if result['status'] != 'success':
         return result
 
-    # Step 2: send file in background (so HTTP response goes back immediately)
+    # Step 2: start the RUDP transfer in the background
     threading.Thread(
         target=send_over_rudp,
         args=(result['filepath'], client_ip, client_port),
@@ -133,8 +167,8 @@ def handle_download_rudp(params, client_addr):
 
 def handle_download_tcp(params, client_addr):
     """
-    Download song and send to client over plain TCP.
-    Transfer runs in background thread so HTTP reply is immediate.
+    Mode 2 (TCP variant): Same as handle_download_rudp but uses plain TCP.
+    Useful for comparing transfer behavior between TCP and our RUDP implementation.
     """
     url         = params.get('url', '')
     title       = params.get('title', 'song')
@@ -161,13 +195,17 @@ def handle_download_tcp(params, client_addr):
     }
 
 def handle_history(_params):
-    """Return list of all previously downloaded songs"""
+    """Return a list of all MP3 files we've already downloaded on the server."""
     return handle_request({'action': 'history'})
 
-# ─── Router ──────────────────────────────────────────────────
+# ─── Router ───────────────────────────────────────────────────
 
 def route(method, path, params, client_addr):
-    """Map URL path to the correct handler function"""
+    """
+    Map the URL path to the right handler function.
+    This is a manual router — the equivalent of Flask's @app.route() decorators,
+    but implemented by hand so we fully understand and control the HTTP layer.
+    """
     if path == '/search':
         return handle_search(params)
     elif path == '/vibe':
@@ -181,12 +219,16 @@ def route(method, path, params, client_addr):
     else:
         return {'status': 'error', 'message': f'Unknown path: {path}'}
 
-# ─── Client Connection Handler ───────────────────────────────
+# ─── Client Connection Handler ────────────────────────────────
 
 def handle_client(conn, client_addr):
     """
-    Runs in a new thread for each incoming client connection.
-    Reads HTTP request → routes it → sends back JSON response.
+    Called in a new thread for each incoming TCP connection.
+    Reads bytes until we see the end of HTTP headers (\r\n\r\n),
+    parses the request, routes it, and sends back a JSON response.
+
+    Each client gets its own thread so multiple clients can connect simultaneously
+    without blocking each other.
     """
     try:
         raw = b''
@@ -212,11 +254,16 @@ def handle_client(conn, client_addr):
         except:
             pass
     finally:
-        conn.close()
+        conn.close()   # always close the connection when done
 
-# ─── Main Server Loop ────────────────────────────────────────
+# ─── Main Server Loop ─────────────────────────────────────────
 
 def start():
+    """
+    Create the main TCP socket for the HTTP control channel.
+    listen(5) allows up to 5 queued connections waiting to be accepted.
+    Each accepted connection gets handed off to handle_client() in its own thread.
+    """
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((HOST, HTTP_PORT))
