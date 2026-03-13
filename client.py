@@ -14,7 +14,7 @@ from rudp import RUDPReceiver, HEADER_SIZE, MAX_SEGMENT_SIZE
 DHCP_SERVER       = '127.0.0.1'
 DHCP_PORT         = 6767   # our custom DHCP port (real DHCP uses 67, requires admin)
 DNS_PORT          = 53     # standard DNS port
-APP_PORT          = 5000   # app_server.py HTTP control port
+APP_PORT          = 5050   # app_server.py HTTP control port
 RUDP_RECEIVE_PORT = 5001   # we (the client) listen here for incoming RUDP file transfers
 TCP_RECEIVE_PORT  = 5002   # we (the client) listen here for incoming TCP file transfers
 

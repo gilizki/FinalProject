@@ -11,7 +11,7 @@ from rudp import RUDPSender
 #   5000 = HTTP control channel (client sends search/download commands here)
 #   5001 = RUDP file transfer (server pushes MP3 to client over our custom protocol)
 #   5002 = plain TCP file transfer (same idea, but using standard TCP)
-HTTP_PORT         = 5000
+HTTP_PORT         = 5050
 RUDP_PORT         = 5001
 TCP_TRANSFER_PORT = 5002
 HOST              = '0.0.0.0'   # accept connections from any machine, not just localhost
